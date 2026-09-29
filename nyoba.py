@@ -1,4 +1,5 @@
 import sqlite3
+import openpyxl
 
 
 conn = sqlite3.connect('laundry.db')
@@ -125,7 +126,34 @@ Pilih Status Laundry:
                 else:
                     print("Pilihan tidak valid. Silakan pilih antara 1 hingga 2.")
     elif Pilihan == 4:
-        print('''''')
+        print("Anda memilih Lihat Laporan Laundry")
+        try:
+            cursor.execute("SELECT * FROM pelanggan")
+            pelanggan_data = cursor.fetchall()
+            cursor.execute("SELECT * FROM transaksi")
+            transaksi_data = cursor.fetchall()
+            print("Data Pelanggan:")
+            for p in pelanggan_data:
+                print(p)
+            print("\nData Transaksi:")
+            for t in transaksi_data:
+                print(t)
+            print("\nMenyiapkan export ke Excel...")
+            wb = openpyxl.Workbook()
+            ws_pelanggan = wb.active
+            ws_pelanggan.title = "Pelanggan"
+            ws_pelanggan.append(["ID Pelanggan", "Nama"])
+            for p in pelanggan_data:
+                ws_pelanggan.append([p[0], p[1]])
+            ws_transaksi = wb.create_sheet("Transaksi")
+            ws_transaksi.append(["ID Transaksi", "ID Pelanggan", "Tanggal", "Status"])
+            for t in transaksi_data:
+                ws_transaksi.append([t[0], t[1], t[2], t[3]])
+            filename = "Laporan_Laundry.xlsx"
+            wb.save(filename)
+            print(f"Laporan berhasil diexport ke {filename}!")
+        except Exception as e:
+            print(f"Error saat export: {e}")
     elif Pilihan == 5:
         print("Terima kasih telah menggunakan layanan Laundry Kami. Sampai jumpa!")
         break
