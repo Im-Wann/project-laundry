@@ -1,9 +1,12 @@
 import sqlite3
 import openpyxl
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 from datetime import datetime
 import os
+import re
+import webbrowser
+from urllib.parse import quote
 
 
 class LaundryApp:
@@ -49,7 +52,8 @@ class LaundryApp:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS pelanggan (
                 id_pelanggan INTEGER PRIMARY KEY AUTOINCREMENT,
-                nama TEXT NOT NULL
+                nama TEXT NOT NULL,
+                nomor_wa TEXT
             )
         ''')
         cursor.execute('''
@@ -61,7 +65,21 @@ class LaundryApp:
                 FOREIGN KEY (id_pelanggan) REFERENCES pelanggan (id_pelanggan)
             )
         ''')
+        columns = [row[1] for row in cursor.execute("PRAGMA table_info(pelanggan)")]
+        if 'nomor_wa' not in columns:
+            cursor.execute("ALTER TABLE pelanggan ADD COLUMN nomor_wa TEXT")
         self.conn.commit()
+
+    @staticmethod
+    def normalize_phone_number(value):
+        number = re.sub(r'\D', '', value)
+        if number.startswith('08'):
+            number = '62' + number[1:]
+        elif number.startswith('8'):
+            number = '62' + number
+        if not re.fullmatch(r'628\d{8,11}', number):
+            raise ValueError("Nomor WhatsApp harus diawali 08 dan berisi 10-13 digit")
+        return number
 
     def build_ui(self):
         # Header
@@ -103,12 +121,28 @@ class LaundryApp:
         ttk.Label(input_frame, text="Nama Pelanggan:").grid(row=0, column=0, sticky=tk.W, padx=(0, 10), pady=5)
         self.entry_nama = ttk.Entry(input_frame, width=40, font=('Segoe UI', 10))
         self.entry_nama.grid(row=0, column=1, sticky=tk.EW, pady=5)
-        self.entry_nama.bind('<Return>', lambda e: self.tambah_pelanggan())
+
+        ttk.Label(input_frame, text="Nomor WhatsApp:").grid(row=1, column=0, sticky=tk.W, padx=(0, 10), pady=5)
+        self.entry_nomor_wa = ttk.Entry(input_frame, width=40, font=('Segoe UI', 10))
+        self.entry_nomor_wa.grid(row=1, column=1, sticky=tk.EW, pady=5)
+        self.entry_nomor_wa.insert(0, "08")
+        self.entry_nomor_wa.bind('<Return>', lambda e: self.tambah_pelanggan())
 
         btn_frame = ttk.Frame(input_frame)
-        btn_frame.grid(row=0, column=2, padx=(15, 0))
+        btn_frame.grid(row=0, column=2, rowspan=2, padx=(15, 0))
         ttk.Button(btn_frame, text="➕ Tambah", style='Primary.TButton', command=self.tambah_pelanggan).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="🔄 Refresh", command=self.refresh_pelanggan).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            btn_frame,
+            text="Edit Pelanggan",
+            command=self.edit_pelanggan
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            btn_frame,
+            text="Hapus Pelanggan",
+            style='Danger.TButton',
+            command=self.hapus_pelanggan
+        ).pack(side=tk.LEFT, padx=5)
 
         input_frame.columnconfigure(1, weight=1)
 
@@ -116,12 +150,14 @@ class LaundryApp:
         table_frame = ttk.LabelFrame(self.tab_pelanggan, text="Daftar Pelanggan", padding=10)
         table_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ('ID', 'Nama')
+        columns = ('ID', 'Nama', 'WhatsApp')
         self.tree_pelanggan = ttk.Treeview(table_frame, columns=columns, show='headings', selectmode='browse')
         self.tree_pelanggan.heading('ID', text='ID Pelanggan')
         self.tree_pelanggan.heading('Nama', text='Nama Pelanggan')
+        self.tree_pelanggan.heading('WhatsApp', text='Nomor WhatsApp')
         self.tree_pelanggan.column('ID', width=120, anchor=tk.CENTER)
-        self.tree_pelanggan.column('Nama', width=400, anchor=tk.W)
+        self.tree_pelanggan.column('Nama', width=300, anchor=tk.W)
+        self.tree_pelanggan.column('WhatsApp', width=180, anchor=tk.CENTER)
 
         scrollbar_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree_pelanggan.yview)
         scrollbar_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree_pelanggan.xview)
@@ -134,9 +170,6 @@ class LaundryApp:
         table_frame.rowconfigure(0, weight=1)
         table_frame.columnconfigure(0, weight=1)
 
-        # Delete button
-        ttk.Button(self.tab_pelanggan, text="🗑️ Hapus Pelanggan Terpilih", style='Danger.TButton',
-                   command=self.hapus_pelanggan).pack(pady=(10, 0))
 
     def build_transaksi_tab(self):
         # Input section
@@ -158,6 +191,9 @@ class LaundryApp:
         btn_frame.grid(row=0, column=2, rowspan=2, padx=(15, 0))
         ttk.Button(btn_frame, text="➕ Buat Transaksi", style='Primary.TButton', command=self.tambah_transaksi).pack(side=tk.LEFT, padx=5, pady=2)
         ttk.Button(btn_frame, text="🔄 Refresh", command=self.refresh_transaksi).pack(side=tk.LEFT, padx=5, pady=2)
+        ttk.Button(btn_frame, text="Edit Transaksi", command=self.edit_transaksi).pack(side=tk.LEFT, padx=5, pady=2)
+        ttk.Button(self.tab_transaksi, text="🗑️ Hapus Transaksi Terpilih", style='Danger.TButton',
+                   command=self.hapus_transaksi).pack(pady=(10, 0))
 
         input_frame.columnconfigure(1, weight=1)
 
@@ -165,10 +201,11 @@ class LaundryApp:
         table_frame = ttk.LabelFrame(self.tab_transaksi, text="Daftar Transaksi", padding=10)
         table_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ('ID Transaksi', 'ID Pelanggan', 'Nama Pelanggan', 'Tanggal', 'Status')
+        columns = ('No.', 'ID Transaksi', 'ID Pelanggan', 'Nama Pelanggan', 'Tanggal', 'Status')
         self.tree_transaksi = ttk.Treeview(table_frame, columns=columns, show='headings', selectmode='browse')
         for col in columns:
             self.tree_transaksi.heading(col, text=col)
+        self.tree_transaksi.column('No.', width=50, anchor=tk.CENTER)
         self.tree_transaksi.column('ID Transaksi', width=100, anchor=tk.CENTER)
         self.tree_transaksi.column('ID Pelanggan', width=100, anchor=tk.CENTER)
         self.tree_transaksi.column('Nama Pelanggan', width=200, anchor=tk.W)
@@ -272,12 +309,14 @@ class LaundryApp:
         pelanggan_frame = ttk.Frame(preview_notebook, padding=10)
         preview_notebook.add(pelanggan_frame, text="Pelanggan")
 
-        columns_p = ('ID', 'Nama')
+        columns_p = ('ID', 'Nama', 'WhatsApp')
         self.tree_laporan_pelanggan = ttk.Treeview(pelanggan_frame, columns=columns_p, show='headings')
         for col in columns_p:
             self.tree_laporan_pelanggan.heading(col, text=col)
         self.tree_laporan_pelanggan.column('ID', width=100, anchor=tk.CENTER)
-        self.tree_laporan_pelanggan.column('Nama', width=300, anchor=tk.W)
+        self.tree_laporan_pelanggan.column('Nama', width=250, anchor=tk.W)
+        self.tree_laporan_pelanggan.heading('WhatsApp', text='Nomor WhatsApp')
+        self.tree_laporan_pelanggan.column('WhatsApp', width=180, anchor=tk.CENTER)
 
         scroll_p = ttk.Scrollbar(pelanggan_frame, orient=tk.VERTICAL, command=self.tree_laporan_pelanggan.yview)
         self.tree_laporan_pelanggan.configure(yscrollcommand=scroll_p.set)
@@ -342,12 +381,66 @@ class LaundryApp:
             return
 
         try:
-            self.execute_query("INSERT INTO pelanggan (nama) VALUES (?)", (nama,))
+            nomor_wa = self.normalize_phone_number(self.entry_nomor_wa.get())
+            self.execute_query(
+                "INSERT INTO pelanggan (nama, nomor_wa) VALUES (?, ?)",
+                (nama, nomor_wa)
+            )
             self.entry_nama.delete(0, tk.END)
+            self.entry_nomor_wa.delete(0, tk.END)
+            self.entry_nomor_wa.insert(0, "08")
             self.refresh_pelanggan()
             messagebox.showinfo("Sukses", f"Pelanggan '{nama}' berhasil ditambahkan!")
+        except ValueError as e:
+            messagebox.showerror("Error", str(e))
         except Exception as e:
             messagebox.showerror("Error", f"Gagal menambah pelanggan: {e}")
+
+    def edit_pelanggan(self):
+        selection = self.tree_pelanggan.selection()
+        if not selection:
+            messagebox.showwarning("Peringatan", "Pilih pelanggan yang ingin diedit!")
+            return
+
+        values = self.tree_pelanggan.item(selection[0], 'values')
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Edit Pelanggan")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Nama pelanggan:").grid(row=0, column=0, padx=10, pady=8, sticky=tk.W)
+        nama_entry = ttk.Entry(dialog, width=35)
+        nama_entry.insert(0, values[1])
+        nama_entry.grid(row=0, column=1, padx=10, pady=8)
+
+        ttk.Label(dialog, text="Nomor WhatsApp:").grid(row=1, column=0, padx=10, pady=8, sticky=tk.W)
+        nomor_entry = ttk.Entry(dialog, width=35)
+        nomor_entry.insert(0, values[2])
+        nomor_entry.grid(row=1, column=1, padx=10, pady=8)
+
+        def simpan():
+            nama = nama_entry.get().strip()
+            if not nama:
+                messagebox.showwarning("Peringatan", "Nama pelanggan tidak boleh kosong!", parent=dialog)
+                return
+            try:
+                nomor_wa = self.normalize_phone_number(nomor_entry.get())
+                self.execute_query(
+                    "UPDATE pelanggan SET nama = ?, nomor_wa = ? WHERE id_pelanggan = ?",
+                    (nama, nomor_wa, values[0])
+                )
+                dialog.destroy()
+                self.refresh_all_data()
+            except ValueError as e:
+                messagebox.showerror("Error", str(e), parent=dialog)
+            except Exception as e:
+                messagebox.showerror("Error", f"Gagal mengedit pelanggan: {e}", parent=dialog)
+
+        ttk.Button(dialog, text="Simpan", command=simpan).grid(row=2, column=1, padx=10, pady=10, sticky=tk.E)
+        ttk.Button(dialog, text="Batal", command=dialog.destroy).grid(row=2, column=0, padx=10, pady=10, sticky=tk.W)
+        nama_entry.focus_set()
+        dialog.wait_window()
+
 
     def hapus_pelanggan(self):
         selection = self.tree_pelanggan.selection()
@@ -359,13 +452,28 @@ class LaundryApp:
         id_pelanggan = item['values'][0]
         nama = item['values'][1]
 
-        if messagebox.askyesno("Konfirmasi", f"Hapus pelanggan '{nama}' (ID: {id_pelanggan})?\nSemua transaksi terkait juga akan terhapus."):
-            try:
-                self.execute_query("DELETE FROM pelanggan WHERE id_pelanggan = ?", (id_pelanggan,))
-                self.refresh_pelanggan()
-                messagebox.showinfo("Sukses", "Pelanggan berhasil dihapus!")
-            except Exception as e:
-                messagebox.showerror("Error", f"Gagal menghapus pelanggan: {e}")
+        if not messagebox.askyesno(
+            "Konfirmasi",
+            f"Hapus pelanggan '{nama}' (ID: {id_pelanggan})?\n"
+            "Semua transaksi terkait juga akan terhapus."
+        ):
+            return
+
+        try:
+            self.execute_query(
+                "DELETE FROM transaksi WHERE id_pelanggan = ?",
+                (id_pelanggan,)
+            )
+            self.execute_query(
+                "DELETE FROM pelanggan WHERE id_pelanggan = ?",
+                (id_pelanggan,)
+            )
+            if self.fetch_one("SELECT COUNT(*) FROM pelanggan")[0] == 0:
+                self.execute_query("DELETE FROM sqlite_sequence WHERE name = 'pelanggan'")
+            self.refresh_all_data()
+            messagebox.showinfo("Sukses", "Pelanggan dan transaksi terkait berhasil dihapus!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal menghapus pelanggan: {e}")
 
     def refresh_pelanggan(self):
         # Clear tree
@@ -373,7 +481,7 @@ class LaundryApp:
             self.tree_pelanggan.delete(item)
 
         # Fetch and populate
-        data = self.fetch_all("SELECT id_pelanggan, nama FROM pelanggan ORDER BY id_pelanggan")
+        data = self.fetch_all("SELECT id_pelanggan, nama, nomor_wa FROM pelanggan ORDER BY id_pelanggan")
         for row in data:
             self.tree_pelanggan.insert('', tk.END, values=row)
 
@@ -423,6 +531,58 @@ class LaundryApp:
         except Exception as e:
             messagebox.showerror("Error", f"Gagal membuat transaksi: {e}")
 
+    def edit_transaksi(self):
+        selection = self.tree_transaksi.selection()
+        if not selection:
+            messagebox.showwarning("Peringatan", "Pilih transaksi yang ingin diedit!")
+            return
+
+        values = self.tree_transaksi.item(selection[0], 'values')
+        tanggal = simpledialog.askstring(
+            "Edit Transaksi", "Tanggal (YYYY-MM-DD):", initialvalue=values[3]
+        )
+        if tanggal is None:
+            return
+        try:
+            datetime.strptime(tanggal.strip(), '%Y-%m-%d')
+            self.execute_query(
+                "UPDATE transaksi SET tanggal = ? WHERE id_transaksi = ?",
+                (tanggal.strip(), values[0])
+            )
+            self.refresh_all_data()
+        except ValueError:
+            messagebox.showerror("Error", "Format tanggal salah! Gunakan YYYY-MM-DD")
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal mengedit transaksi: {e}")
+
+    def hapus_transaksi(self):
+        selection = self.tree_transaksi.selection()
+        if not selection:
+            messagebox.showwarning("Peringatan", "Pilih transaksi yang ingin dihapus!")
+            return
+
+        item = self.tree_transaksi.item(selection[0])
+        id_transaksi = item['values'][0]
+        nama = item['values'][2]
+
+        if not messagebox.askyesno(
+            "Konfirmasi",
+            f"Hapus transaksi ID {id_transaksi} milik '{nama}'?"
+        ):
+            return
+
+        try:
+            self.execute_query(
+                "DELETE FROM transaksi WHERE id_transaksi = ?",
+                (id_transaksi,)
+            )
+            self.refresh_transaksi()
+            self.refresh_status_tab()
+            self.refresh_laporan()
+            messagebox.showinfo("Sukses", "Transaksi berhasil dihapus!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal menghapus transaksi: {e}")
+
     def refresh_transaksi(self):
         for item in self.tree_transaksi.get_children():
             self.tree_transaksi.delete(item)
@@ -433,8 +593,8 @@ class LaundryApp:
             JOIN pelanggan p ON t.id_pelanggan = p.id_pelanggan
             ORDER BY t.id_transaksi DESC
         ''')
-        for row in data:
-            self.tree_transaksi.insert('', tk.END, values=row, tags=(row[4],))
+        for nomor, row in enumerate(data, start=1):
+            self.tree_transaksi.insert('', tk.END, values=(nomor, *row), tags=(row[4],))
 
         self.update_transaksi_combobox()
 
@@ -468,8 +628,14 @@ class LaundryApp:
             return
 
         try:
+            old_status = self.fetch_one(
+                "SELECT status FROM transaksi WHERE id_transaksi = ?",
+                (id_transaksi,)
+            )
             self.execute_query("UPDATE transaksi SET status = ? WHERE id_transaksi = ?", (new_status, id_transaksi))
             self.refresh_status_tab()
+            if old_status and old_status[0] != "SELESAI" and new_status == "SELESAI":
+                self.open_whatsapp_message(id_transaksi)
             messagebox.showinfo("Sukses", f"Status transaksi ID {id_transaksi} berhasil diupdate ke {new_status}!")
         except Exception as e:
             messagebox.showerror("Error", f"Gagal update status: {e}")
@@ -489,6 +655,25 @@ class LaundryApp:
 
         self.update_transaksi_combobox()
 
+    def open_whatsapp_message(self, id_transaksi):
+        data = self.fetch_one('''
+            SELECT p.nomor_wa, p.nama, t.tanggal
+            FROM transaksi t
+            JOIN pelanggan p ON t.id_pelanggan = p.id_pelanggan
+            WHERE t.id_transaksi = ?
+        ''', (id_transaksi,))
+        if not data or not data[0]:
+            messagebox.showwarning("WhatsApp", "Nomor WhatsApp pelanggan belum tersedia.")
+            return
+
+        nomor_wa, nama, tanggal = data
+        pesan = (
+            f"Halo {nama}, laundry Anda pada tanggal {tanggal} "
+            "sudah selesai dan dapat diambil. Terima kasih."
+        )
+        url = f"https://web.whatsapp.com/send?phone={nomor_wa}&text={quote(pesan)}"
+        webbrowser.open(url)
+
     # --- Laporan & Export ---
     def refresh_laporan(self):
         # Stats
@@ -507,7 +692,7 @@ class LaundryApp:
         # Pelanggan table
         for item in self.tree_laporan_pelanggan.get_children():
             self.tree_laporan_pelanggan.delete(item)
-        pelanggan_data = self.fetch_all("SELECT id_pelanggan, nama FROM pelanggan ORDER BY id_pelanggan")
+        pelanggan_data = self.fetch_all("SELECT id_pelanggan, nama, nomor_wa FROM pelanggan ORDER BY id_pelanggan")
         for row in pelanggan_data:
             self.tree_laporan_pelanggan.insert('', tk.END, values=row)
 
@@ -541,10 +726,10 @@ class LaundryApp:
                 ws_pelanggan = wb.create_sheet("Pelanggan")
             else:
                 ws_pelanggan.title = "Pelanggan"
-            ws_pelanggan.append(["ID Pelanggan", "Nama"])
-            pelanggan_data = self.fetch_all("SELECT id_pelanggan, nama FROM pelanggan ORDER BY id_pelanggan")
+            ws_pelanggan.append(["ID Pelanggan", "Nama", "Nomor WhatsApp"])
+            pelanggan_data = self.fetch_all("SELECT id_pelanggan, nama, nomor_wa FROM pelanggan ORDER BY id_pelanggan")
             for p in pelanggan_data:
-                ws_pelanggan.append([p[0], p[1]])
+                ws_pelanggan.append([p[0], p[1], p[2]])
 
             # Sheet Transaksi
             ws_transaksi = wb.create_sheet("Transaksi")
