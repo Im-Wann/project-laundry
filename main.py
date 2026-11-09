@@ -62,12 +62,19 @@ class LaundryApp:
                 id_pelanggan INTEGER NOT NULL,
                 tanggal TEXT NOT NULL,
                 status TEXT NOT NULL,
+                berat_baju REAL DEFAULT 0,
+                harga REAL DEFAULT 0,
                 FOREIGN KEY (id_pelanggan) REFERENCES pelanggan (id_pelanggan)
             )
         ''')
         columns = [row[1] for row in cursor.execute("PRAGMA table_info(pelanggan)")]
         if 'nomor_wa' not in columns:
             cursor.execute("ALTER TABLE pelanggan ADD COLUMN nomor_wa TEXT")
+        transaksi_columns = [row[1] for row in cursor.execute("PRAGMA table_info(transaksi)")]
+        if 'berat_baju' not in transaksi_columns:
+            cursor.execute("ALTER TABLE transaksi ADD COLUMN berat_baju REAL DEFAULT 0")
+        if 'harga' not in transaksi_columns:
+            cursor.execute("ALTER TABLE transaksi ADD COLUMN harga REAL DEFAULT 0")
         self.conn.commit()
 
     @staticmethod
@@ -80,6 +87,16 @@ class LaundryApp:
         if not re.fullmatch(r'628\d{8,11}', number):
             raise ValueError("Nomor WhatsApp harus diawali 08 dan berisi 10-13 digit")
         return number
+
+    def hitung_harga(self):
+        """Hitung harga berdasarkan berat baju (5000 per kg)"""
+        try:
+            berat = float(self.entry_berat_baju.get() or 0)
+            harga = berat * 5000
+            self.entry_harga.delete(0, tk.END)
+            self.entry_harga.insert(0, str(int(harga)))
+        except ValueError:
+            pass
 
     def build_ui(self):
         # Header
@@ -187,8 +204,19 @@ class LaundryApp:
         self.entry_tanggal.grid(row=1, column=1, sticky=tk.EW, pady=5)
         self.entry_tanggal.insert(0, datetime.now().strftime('%Y-%m-%d'))
 
+        # Berat Baju
+        ttk.Label(input_frame, text="Berat Baju (kg):").grid(row=2, column=0, sticky=tk.W, padx=(0, 10), pady=5)
+        self.entry_berat_baju = ttk.Entry(input_frame, width=40, font=('Segoe UI', 10))
+        self.entry_berat_baju.grid(row=2, column=1, sticky=tk.EW, pady=5)
+        self.entry_berat_baju.bind('<KeyRelease>', lambda e: self.hitung_harga())
+
+        # Harga
+        ttk.Label(input_frame, text="Harga (Rp):").grid(row=3, column=0, sticky=tk.W, padx=(0, 10), pady=5)
+        self.entry_harga = ttk.Entry(input_frame, width=40, font=('Segoe UI', 10))
+        self.entry_harga.grid(row=3, column=1, sticky=tk.EW, pady=5)
+
         btn_frame = ttk.Frame(input_frame)
-        btn_frame.grid(row=0, column=2, rowspan=2, padx=(15, 0))
+        btn_frame.grid(row=0, column=2, rowspan=4, padx=(15, 0))
         ttk.Button(btn_frame, text="➕ Buat Transaksi", style='Primary.TButton', command=self.tambah_transaksi).pack(side=tk.LEFT, padx=5, pady=2)
         ttk.Button(btn_frame, text="🔄 Refresh", command=self.refresh_transaksi).pack(side=tk.LEFT, padx=5, pady=2)
         ttk.Button(btn_frame, text="Edit Transaksi", command=self.edit_transaksi).pack(side=tk.LEFT, padx=5, pady=2)
@@ -201,16 +229,18 @@ class LaundryApp:
         table_frame = ttk.LabelFrame(self.tab_transaksi, text="Daftar Transaksi", padding=10)
         table_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ('No.', 'ID Transaksi', 'ID Pelanggan', 'Nama Pelanggan', 'Tanggal', 'Status')
+        columns = ('No.', 'ID Transaksi', 'ID Pelanggan', 'Nama Pelanggan', 'Tanggal', 'Berat (kg)', 'Harga (Rp)', 'Status')
         self.tree_transaksi = ttk.Treeview(table_frame, columns=columns, show='headings', selectmode='browse')
         for col in columns:
             self.tree_transaksi.heading(col, text=col)
         self.tree_transaksi.column('No.', width=50, anchor=tk.CENTER)
         self.tree_transaksi.column('ID Transaksi', width=100, anchor=tk.CENTER)
         self.tree_transaksi.column('ID Pelanggan', width=100, anchor=tk.CENTER)
-        self.tree_transaksi.column('Nama Pelanggan', width=200, anchor=tk.W)
+        self.tree_transaksi.column('Nama Pelanggan', width=150, anchor=tk.W)
         self.tree_transaksi.column('Tanggal', width=120, anchor=tk.CENTER)
-        self.tree_transaksi.column('Status', width=100, anchor=tk.CENTER)
+        self.tree_transaksi.column('Berat (kg)', width=100, anchor=tk.CENTER)
+        self.tree_transaksi.column('Harga (Rp)', width=120, anchor=tk.CENTER)
+        self.tree_transaksi.column('Status', width=80, anchor=tk.CENTER)
 
         scrollbar_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree_transaksi.yview)
         scrollbar_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree_transaksi.xview)
@@ -254,15 +284,17 @@ class LaundryApp:
         table_frame = ttk.LabelFrame(self.tab_status, text="Semua Transaksi", padding=10)
         table_frame.pack(fill=tk.BOTH, expand=True)
 
-        columns = ('ID Transaksi', 'ID Pelanggan', 'Nama Pelanggan', 'Tanggal', 'Status')
+        columns = ('ID Transaksi', 'ID Pelanggan', 'Nama Pelanggan', 'Tanggal', 'Berat (kg)', 'Harga (Rp)', 'Status')
         self.tree_status = ttk.Treeview(table_frame, columns=columns, show='headings', selectmode='browse')
         for col in columns:
             self.tree_status.heading(col, text=col)
         self.tree_status.column('ID Transaksi', width=100, anchor=tk.CENTER)
         self.tree_status.column('ID Pelanggan', width=100, anchor=tk.CENTER)
-        self.tree_status.column('Nama Pelanggan', width=200, anchor=tk.W)
+        self.tree_status.column('Nama Pelanggan', width=150, anchor=tk.W)
         self.tree_status.column('Tanggal', width=120, anchor=tk.CENTER)
-        self.tree_status.column('Status', width=100, anchor=tk.CENTER)
+        self.tree_status.column('Berat (kg)', width=100, anchor=tk.CENTER)
+        self.tree_status.column('Harga (Rp)', width=120, anchor=tk.CENTER)
+        self.tree_status.column('Status', width=80, anchor=tk.CENTER)
 
         scrollbar_y = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree_status.yview)
         scrollbar_x = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree_status.xview)
@@ -327,15 +359,17 @@ class LaundryApp:
         transaksi_frame = ttk.Frame(preview_notebook, padding=10)
         preview_notebook.add(transaksi_frame, text="Transaksi")
 
-        columns_t = ('ID Transaksi', 'ID Pelanggan', 'Nama Pelanggan', 'Tanggal', 'Status')
+        columns_t = ('ID Transaksi', 'ID Pelanggan', 'Nama Pelanggan', 'Tanggal', 'Berat (kg)', 'Harga (Rp)', 'Status')
         self.tree_laporan_transaksi = ttk.Treeview(transaksi_frame, columns=columns_t, show='headings')
         for col in columns_t:
             self.tree_laporan_transaksi.heading(col, text=col)
         self.tree_laporan_transaksi.column('ID Transaksi', width=100, anchor=tk.CENTER)
         self.tree_laporan_transaksi.column('ID Pelanggan', width=100, anchor=tk.CENTER)
-        self.tree_laporan_transaksi.column('Nama Pelanggan', width=180, anchor=tk.W)
+        self.tree_laporan_transaksi.column('Nama Pelanggan', width=130, anchor=tk.W)
         self.tree_laporan_transaksi.column('Tanggal', width=120, anchor=tk.CENTER)
-        self.tree_laporan_transaksi.column('Status', width=100, anchor=tk.CENTER)
+        self.tree_laporan_transaksi.column('Berat (kg)', width=100, anchor=tk.CENTER)
+        self.tree_laporan_transaksi.column('Harga (Rp)', width=120, anchor=tk.CENTER)
+        self.tree_laporan_transaksi.column('Status', width=80, anchor=tk.CENTER)
 
         scroll_t = ttk.Scrollbar(transaksi_frame, orient=tk.VERTICAL, command=self.tree_laporan_transaksi.yview)
         self.tree_laporan_transaksi.configure(yscrollcommand=scroll_t.set)
@@ -519,13 +553,23 @@ class LaundryApp:
             messagebox.showerror("Error", "Format tanggal salah! Gunakan YYYY-MM-DD")
             return
 
+        # Get berat and harga
+        try:
+            berat_baju = float(self.entry_berat_baju.get() or 0)
+            harga = float(self.entry_harga.get() or 0)
+        except ValueError:
+            messagebox.showerror("Error", "Berat atau harga harus berupa angka!")
+            return
+
         try:
             self.execute_query(
-                "INSERT INTO transaksi (id_pelanggan, tanggal, status) VALUES (?, ?, ?)",
-                (id_pelanggan, tanggal, "PROSES")
+                "INSERT INTO transaksi (id_pelanggan, tanggal, status, berat_baju, harga) VALUES (?, ?, ?, ?, ?)",
+                (id_pelanggan, tanggal, "PROSES", berat_baju, harga)
             )
             self.entry_tanggal.delete(0, tk.END)
             self.entry_tanggal.insert(0, datetime.now().strftime('%Y-%m-%d'))
+            self.entry_berat_baju.delete(0, tk.END)
+            self.entry_harga.delete(0, tk.END)
             self.refresh_transaksi()
             messagebox.showinfo("Sukses", "Transaksi baru berhasil dibuat dengan status PROSES!")
         except Exception as e:
@@ -588,13 +632,13 @@ class LaundryApp:
             self.tree_transaksi.delete(item)
 
         data = self.fetch_all('''
-            SELECT t.id_transaksi, t.id_pelanggan, p.nama, t.tanggal, t.status
+            SELECT t.id_transaksi, t.id_pelanggan, p.nama, t.tanggal, t.berat_baju, t.harga, t.status
             FROM transaksi t
             JOIN pelanggan p ON t.id_pelanggan = p.id_pelanggan
             ORDER BY t.id_transaksi DESC
         ''')
         for nomor, row in enumerate(data, start=1):
-            self.tree_transaksi.insert('', tk.END, values=(nomor, *row), tags=(row[4],))
+            self.tree_transaksi.insert('', tk.END, values=(nomor, *row), tags=(row[6],))
 
         self.update_transaksi_combobox()
 
@@ -645,13 +689,13 @@ class LaundryApp:
             self.tree_status.delete(item)
 
         data = self.fetch_all('''
-            SELECT t.id_transaksi, t.id_pelanggan, p.nama, t.tanggal, t.status
+            SELECT t.id_transaksi, t.id_pelanggan, p.nama, t.tanggal, t.berat_baju, t.harga, t.status
             FROM transaksi t
             JOIN pelanggan p ON t.id_pelanggan = p.id_pelanggan
             ORDER BY t.id_transaksi DESC
         ''')
         for row in data:
-            self.tree_status.insert('', tk.END, values=row, tags=(row[4],))
+            self.tree_status.insert('', tk.END, values=row, tags=(row[6],))
 
         self.update_transaksi_combobox()
 
@@ -700,13 +744,13 @@ class LaundryApp:
         for item in self.tree_laporan_transaksi.get_children():
             self.tree_laporan_transaksi.delete(item)
         transaksi_data = self.fetch_all('''
-            SELECT t.id_transaksi, t.id_pelanggan, p.nama, t.tanggal, t.status
+            SELECT t.id_transaksi, t.id_pelanggan, p.nama, t.tanggal, t.berat_baju, t.harga, t.status
             FROM transaksi t
             JOIN pelanggan p ON t.id_pelanggan = p.id_pelanggan
             ORDER BY t.id_transaksi DESC
         ''')
         for row in transaksi_data:
-            self.tree_laporan_transaksi.insert('', tk.END, values=row, tags=(row[4],))
+            self.tree_laporan_transaksi.insert('', tk.END, values=row, tags=(row[6],))
 
     def export_excel(self):
         filename = filedialog.asksaveasfilename(
@@ -733,15 +777,15 @@ class LaundryApp:
 
             # Sheet Transaksi
             ws_transaksi = wb.create_sheet("Transaksi")
-            ws_transaksi.append(["ID Transaksi", "ID Pelanggan", "Nama Pelanggan", "Tanggal", "Status"])
+            ws_transaksi.append(["ID Transaksi", "ID Pelanggan", "Nama Pelanggan", "Tanggal", "Berat Baju (kg)", "Harga (Rp)", "Status"])
             transaksi_data = self.fetch_all('''
-                SELECT t.id_transaksi, t.id_pelanggan, p.nama, t.tanggal, t.status
+                SELECT t.id_transaksi, t.id_pelanggan, p.nama, t.tanggal, t.berat_baju, t.harga, t.status
                 FROM transaksi t
                 JOIN pelanggan p ON t.id_pelanggan = p.id_pelanggan
                 ORDER BY t.id_transaksi DESC
             ''')
             for t in transaksi_data:
-                ws_transaksi.append([t[0], t[1], t[2], t[3], t[4]])
+                ws_transaksi.append([t[0], t[1], t[2], t[3], t[4], t[5], t[6]])
 
             wb.save(filename)
             messagebox.showinfo("Sukses", f"Laporan berhasil diexport ke:\n{filename}")
