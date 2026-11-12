@@ -321,6 +321,7 @@ class LaundryApp:
         self.stat_proses = self.create_stat_card(stats_frame, "Sedang Proses", "0", "#f39c12")
         self.stat_selesai = self.create_stat_card(stats_frame, "Selesai", "0", "#27ae60")
         self.stat_batal = self.create_stat_card(stats_frame, "Dibatalkan", "0", "#e74c3c")
+        self.stat_pendapatan = self.create_stat_card(stats_frame, "Pendapatan Selesai", "Rp 0", "#8e44ad")
 
         # Buttons
         btn_frame = ttk.Frame(self.tab_laporan)
@@ -355,9 +356,28 @@ class LaundryApp:
         self.tree_laporan_pelanggan.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_p.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Keuangan / Transaksi Selesai preview
+        keuangan_frame = ttk.Frame(preview_notebook, padding=10)
+        preview_notebook.add(keuangan_frame, text="Catatan Keuangan (Selesai)")
+
+        columns_k = ('ID Transaksi', 'Tanggal', 'Nama Pelanggan', 'Berat (kg)', 'Pendapatan (Rp)')
+        self.tree_laporan_keuangan = ttk.Treeview(keuangan_frame, columns=columns_k, show='headings')
+        for col in columns_k:
+            self.tree_laporan_keuangan.heading(col, text=col)
+        self.tree_laporan_keuangan.column('ID Transaksi', width=100, anchor=tk.CENTER)
+        self.tree_laporan_keuangan.column('Tanggal', width=120, anchor=tk.CENTER)
+        self.tree_laporan_keuangan.column('Nama Pelanggan', width=180, anchor=tk.W)
+        self.tree_laporan_keuangan.column('Berat (kg)', width=100, anchor=tk.CENTER)
+        self.tree_laporan_keuangan.column('Pendapatan (Rp)', width=150, anchor=tk.E)
+
+        scroll_k = ttk.Scrollbar(keuangan_frame, orient=tk.VERTICAL, command=self.tree_laporan_keuangan.yview)
+        self.tree_laporan_keuangan.configure(yscrollcommand=scroll_k.set)
+        self.tree_laporan_keuangan.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll_k.pack(side=tk.RIGHT, fill=tk.Y)
+
         # Transaksi preview
         transaksi_frame = ttk.Frame(preview_notebook, padding=10)
-        preview_notebook.add(transaksi_frame, text="Transaksi")
+        preview_notebook.add(transaksi_frame, text="Semua Transaksi")
 
         columns_t = ('ID Transaksi', 'ID Pelanggan', 'Nama Pelanggan', 'Tanggal', 'Berat (kg)', 'Harga (Rp)', 'Status')
         self.tree_laporan_transaksi = ttk.Treeview(transaksi_frame, columns=columns_t, show='headings')
@@ -606,8 +626,10 @@ class LaundryApp:
             return
 
         item = self.tree_transaksi.item(selection[0])
-        id_transaksi = item['values'][0]
-        nama = item['values'][2]
+        vals = item['values']
+        # values format: (No, id_transaksi, id_pelanggan, nama, tanggal, berat, harga, status)
+        id_transaksi = vals[1]
+        nama = vals[3]
 
         if not messagebox.askyesno(
             "Konfirmasi",
@@ -620,9 +642,7 @@ class LaundryApp:
                 "DELETE FROM transaksi WHERE id_transaksi = ?",
                 (id_transaksi,)
             )
-            self.refresh_transaksi()
-            self.refresh_status_tab()
-            self.refresh_laporan()
+            self.refresh_all_data()
             messagebox.showinfo("Sukses", "Transaksi berhasil dihapus!")
         except Exception as e:
             messagebox.showerror("Error", f"Gagal menghapus transaksi: {e}")
@@ -726,12 +746,14 @@ class LaundryApp:
         proses = self.fetch_one("SELECT COUNT(*) FROM transaksi WHERE status = 'PROSES'")[0]
         selesai = self.fetch_one("SELECT COUNT(*) FROM transaksi WHERE status = 'SELESAI'")[0]
         batal = self.fetch_one("SELECT COUNT(*) FROM transaksi WHERE status = 'BATAL'")[0]
+        total_pendapatan = self.fetch_one("SELECT SUM(harga) FROM transaksi WHERE status = 'SELESAI'")[0] or 0
 
         self.stat_total_pelanggan.config(text=str(total_pelanggan))
         self.stat_total_transaksi.config(text=str(total_transaksi))
         self.stat_proses.config(text=str(proses))
         self.stat_selesai.config(text=str(selesai))
         self.stat_batal.config(text=str(batal))
+        self.stat_pendapatan.config(text=f"Rp {total_pendapatan:,.0f}")
 
         # Pelanggan table
         for item in self.tree_laporan_pelanggan.get_children():
@@ -739,6 +761,20 @@ class LaundryApp:
         pelanggan_data = self.fetch_all("SELECT id_pelanggan, nama, nomor_wa FROM pelanggan ORDER BY id_pelanggan")
         for row in pelanggan_data:
             self.tree_laporan_pelanggan.insert('', tk.END, values=row)
+
+        # Keuangan (Selesai) table
+        for item in self.tree_laporan_keuangan.get_children():
+            self.tree_laporan_keuangan.delete(item)
+        keuangan_data = self.fetch_all('''
+            SELECT t.id_transaksi, t.tanggal, p.nama, t.berat_baju, t.harga
+            FROM transaksi t
+            JOIN pelanggan p ON t.id_pelanggan = p.id_pelanggan
+            WHERE t.status = 'SELESAI'
+            ORDER BY t.id_transaksi DESC
+        ''')
+        for row in keuangan_data:
+            formatted_harga = f"Rp {row[4]:,.0f}" if row[4] else "Rp 0"
+            self.tree_laporan_keuangan.insert('', tk.END, values=(row[0], row[1], row[2], row[3], formatted_harga))
 
         # Transaksi table
         for item in self.tree_laporan_transaksi.get_children():
@@ -786,6 +822,19 @@ class LaundryApp:
             ''')
             for t in transaksi_data:
                 ws_transaksi.append([t[0], t[1], t[2], t[3], t[4], t[5], t[6]])
+
+            # Sheet Keuangan (Selesai)
+            ws_keuangan = wb.create_sheet("Keuangan Selesai")
+            ws_keuangan.append(["ID Transaksi", "Tanggal", "Nama Pelanggan", "Berat Baju (kg)", "Pendapatan (Rp)"])
+            keuangan_data = self.fetch_all('''
+                SELECT t.id_transaksi, t.tanggal, p.nama, t.berat_baju, t.harga
+                FROM transaksi t
+                JOIN pelanggan p ON t.id_pelanggan = p.id_pelanggan
+                WHERE t.status = 'SELESAI'
+                ORDER BY t.id_transaksi DESC
+            ''')
+            for k in keuangan_data:
+                ws_keuangan.append([k[0], k[1], k[2], k[3], k[4]])
 
             wb.save(filename)
             messagebox.showinfo("Sukses", f"Laporan berhasil diexport ke:\n{filename}")
