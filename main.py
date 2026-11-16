@@ -721,7 +721,7 @@ class LaundryApp:
 
     def open_whatsapp_message(self, id_transaksi):
         data = self.fetch_one('''
-            SELECT p.nomor_wa, p.nama, t.tanggal
+            SELECT p.nomor_wa, p.nama, t.tanggal, t.berat_baju, t.harga
             FROM transaksi t
             JOIN pelanggan p ON t.id_pelanggan = p.id_pelanggan
             WHERE t.id_transaksi = ?
@@ -730,10 +730,17 @@ class LaundryApp:
             messagebox.showwarning("WhatsApp", "Nomor WhatsApp pelanggan belum tersedia.")
             return
 
-        nomor_wa, nama, tanggal = data
+        nomor_wa, nama, tanggal, berat, harga = data
+        try:
+            tgl = datetime.strptime(tanggal, '%Y-%m-%d').strftime('%d-%m-%Y')
+        except (ValueError, TypeError):
+            tgl = tanggal
         pesan = (
-            f"Halo {nama}, laundry Anda pada tanggal {tanggal} "
-            "sudah selesai dan dapat diambil. Terima kasih."
+            f"Halo {nama}, laundry Anda pada tanggal {tgl} "
+            "sudah selesai dan dapat diambil. Terima kasih.\n\n"
+            f"Detail pesanan:\n"
+            f"Total berat: {berat} kg\n"
+            f"Total harga: Rp {harga:,}".replace(",", ".")
         )
         url = f"https://web.whatsapp.com/send?phone={nomor_wa}&text={quote(pesan)}"
         webbrowser.open(url)
